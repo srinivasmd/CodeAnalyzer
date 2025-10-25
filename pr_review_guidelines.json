@@ -1,0 +1,214 @@
+{
+  "title": "Pull Request Review Guidelines for Java and Web Technologies",
+  "version": "1.0",
+  "file_types": {
+    "java": {
+      "file_extension": ".java",
+      "rules": {
+        "naming": {
+          "class": {
+            "pattern": "^[A-Z][a-zA-Z0-9]*$",
+            "description": "Class names must use UpperCamelCase."
+          },
+          "method": {
+            "pattern": "^[a-z][a-zA-Z0-9]*$",
+            "description": "Method names must use lowerCamelCase."
+          },
+          "variable": {
+            "pattern": "^[a-z][a-zA-Z0-9]*$",
+            "description": "Variable names must use lowerCamelCase."
+          },
+          "constant": {
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "description": "Constants must use UPPER_SNAKE_CASE."
+          },
+          "package": {
+            "pattern": "^[a-z][a-z0-9.]*$",
+            "description": "Packages must use lowercase with dots, e.g., com.example.module."
+          }
+        },
+        "formatting": {
+          "indentation": {
+            "size": 4,
+            "type": "spaces",
+            "description": "Use 4 spaces for indentation, no tabs."
+          },
+          "line_length": {
+            "max": 120,
+            "description": "Lines must not exceed 120 characters."
+          },
+          "braces": {
+            "style": "egyptian",
+            "description": "Opening brace on same line as declaration."
+          },
+          "spacing": {
+            "operators": {
+              "rule": "space_around",
+              "description": "Add space before and after operators, e.g., a + b."
+            },
+            "method_parentheses": {
+              "rule": "no_space_before",
+              "description": "No space between method name and parentheses, e.g., methodName()."
+            }
+          }
+        },
+        "comments": {
+          "javadoc": {
+            "required": ["public_class", "public_method", "public_interface"],
+            "description": "Javadoc required for public classes, methods, and interfaces."
+          },
+          "redundant": {
+            "rule": "avoid",
+            "description": "Avoid redundant comments, e.g., '// Increment i' for i++."
+          }
+        },
+        "error_handling": {
+          "empty_catch": {
+            "rule": "prohibited",
+            "description": "Empty catch blocks are not allowed."
+          },
+          "logging": {
+            "rule": "required",
+            "description": "Log exceptions with meaningful messages."
+          }
+        },
+        "best_practices": {
+          "magic_numbers": {
+            "rule": "use_constants",
+            "description": "Replace magic numbers/strings with named constants."
+          },
+          "dependency_injection": {
+            "preferred": "constructor",
+            "description": "Use constructor injection for dependencies in Spring."
+          }
+        }
+      }
+    },
+    "html": {
+      "file_extension": ".html",
+      "rules": {
+        "formatting": {
+          "indentation": {
+            "size": 2,
+            "type": "spaces",
+            "description": "Use 2 spaces for indentation."
+          },
+          "doctype": {
+            "required": "<!DOCTYPE html>",
+            "description": "HTML files must start with <!DOCTYPE html>."
+          },
+          "attributes": {
+            "case": "lowercase",
+            "quotes": "double",
+            "description": "Use lowercase attributes with double quotes."
+          }
+        },
+        "semantics": {
+          "tags": {
+            "preferred": ["header", "article", "footer", "section", "nav"],
+            "description": "Use semantic HTML tags where applicable."
+          }
+        }
+      }
+    },
+    "css": {
+      "file_extension": [".css", ".scss"],
+      "rules": {
+        "naming": {
+          "selector": {
+            "pattern": "^\\.[a-z][a-z0-9-]*$",
+            "description": "Class selectors use lowercase with hyphens, e.g., .user-profile."
+          }
+        },
+        "formatting": {
+          "indentation": {
+            "size": 2,
+            "type": "spaces",
+            "description": "Use 2 spaces for indentation."
+          },
+          "rule_structure": {
+            "selector_per_line": 1,
+            "property_per_line": 1,
+            "description": "One selector and one property per line."
+          }
+        },
+        "best_practices": {
+          "units": {
+            "preferred": ["%", "vw", "vh", "rem", "em"],
+            "description": "Use relative units for responsive design."
+          }
+        }
+      }
+    },
+    "javascript": {
+      "file_extension": [".js", ".jsx"],
+      "rules": {
+        "naming": {
+          "file": {
+            "pattern": "^[a-z][a-zA-Z0-9]*\\.js(x)?$|^[a-z][a-z0-9-]*\\.js(x)?$",
+            "description": "JS/JSX files use lowerCamelCase or kebab-case."
+          },
+          "variable": {
+            "pattern": "^[a-z][a-zA-Z0-9]*$",
+            "description": "Variables use lowerCamelCase."
+          }
+        },
+        "formatting": {
+          "indentation": {
+            "size": 2,
+            "type": "spaces",
+            "description": "Use 2 spaces for indentation."
+          },
+          "quotes": {
+            "type": "single",
+            "description": "Use single quotes for strings."
+          },
+          "semicolons": {
+            "required": true,
+            "description": "End statements with semicolons."
+          }
+        },
+        "best_practices": {
+          "modules": {
+            "preferred": "es_modules",
+            "description": "Use ES modules (import/export) over CommonJS."
+          },
+          "async_await": {
+            "rule": "prefer",
+            "description": "Use async/await for asynchronous code."
+          }
+        },
+        "react": {
+          "components": {
+            "type": "functional",
+            "description": "Use functional components with hooks."
+          },
+          "attributes": {
+            "class": "className",
+            "description": "Use className instead of class in JSX."
+          },
+          "styling": {
+            "preferred": ["tailwind", "css_modules"],
+            "description": "Use Tailwind CSS or CSS modules for styling."
+          }
+        }
+      }
+    }
+  },
+  "general": {
+    "commit_message": {
+      "format": "^(feat|fix|docs|style|refactor|test|chore): .+$",
+      "description": "Commit messages must follow '[type]: description' format."
+    },
+    "security": {
+      "input_sanitization": {
+        "rule": "required",
+        "description": "Sanitize user inputs to prevent XSS and SQL injection."
+      },
+      "https": {
+        "rule": "required",
+        "description": "Use HTTPS for all API calls."
+      }
+    }
+  }
+}

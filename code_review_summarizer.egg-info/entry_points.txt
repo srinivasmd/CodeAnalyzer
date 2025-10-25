@@ -1,0 +1,2 @@
+[console_scripts]
+code-review-summarizer = code_review_summarizer.main:main

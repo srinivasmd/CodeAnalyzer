@@ -1,0 +1,57 @@
+{
+    "analysis": {
+        "max_file_size": 1000000,
+        "ignore_patterns": [
+            "*.min.js",
+            "*.min.css",
+            "node_modules/*",
+            "dist/*",
+            "build/*"
+        ],
+        "high_risk_patterns": [
+            "password",
+            "token",
+            "secret",
+            "auth",
+            "payment",
+            "credit",
+            "exec",
+            "eval"
+        ]
+    },
+    "static_analysis": {
+        "pylint": {
+            "enabled": true,
+            "config_file": ".pylintrc",
+            "threshold": 8.0
+        },
+        "eslint": {
+            "enabled": true,
+            "config_file": ".eslintrc",
+            "threshold": "error"
+        },
+        "sonarqube": {
+            "enabled": false,
+            "host_url": "http://localhost:9000",
+            "token": "",
+            "project_key": "pr-analysis",
+            "quality_gate": "default"
+        },
+        "bandit": {
+            "enabled": true,
+            "severity_threshold": "medium"
+        }
+    },
+    "review": {
+        "min_reviewers": 2,
+        "required_approval_count": 1,
+        "auto_assign": true,
+        "assign_by_expertise": true
+    },
+    "reporting": {
+        "output_format": "json",
+        "include_stats": true,
+        "include_links": true,
+        "max_summary_length": 500
+    }
+}

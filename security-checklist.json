@@ -1,0 +1,196 @@
+{
+  "security_checklist": {
+    "title": "Security Checklist for Java and Web Technologies",
+    "description": "Guidelines and checks for secure coding practices in Java and web applications to ensure compliance with security standards and mitigate common vulnerabilities.",
+    "categories": [
+      {
+        "category": "Input Validation and Sanitization",
+        "checks": [
+          {
+            "id": "INP-001",
+            "description": "Validate all user inputs to prevent injection attacks (e.g., SQL Injection, XSS).",
+            "pattern": {
+              "regex": "(?i)(request\\.getParameter\\s*\\([^)]+\\)|Scanner\\.next\\s*\\([^)]*\\))[^;]*;[^{]*\\b(executeQuery|executeUpdate|setString|setParameter)\\b",
+              "language": "Java",
+              "severity": "High",
+              "recommendation": "Use OWASP Java Encoder or ESAPI for input sanitization. Use PreparedStatement for database queries."
+            }
+          },
+          {
+            "id": "INP-002",
+            "description": "Sanitize HTML inputs to prevent Cross-Site Scripting (XSS).",
+            "pattern": {
+              "regex": "(?i)(print\\s*\\([^)]*\\)|write\\s*\\([^)]*\\)|out\\.println\\s*\\([^)]*\\))[^;]*\\b(request\\.getParameter|session\\.getAttribute)\\b",
+              "language": "Java/JSP",
+              "severity": "High",
+              "recommendation": "Use OWASP Java Encoder for HTML output or a secure template engine like Thymeleaf."
+            }
+          }
+        ]
+      },
+      {
+        "category": "Authentication and Session Management",
+        "checks": [
+          {
+            "id": "AUTH-001",
+            "description": "Ensure secure password storage using strong hashing algorithms.",
+            "pattern": {
+              "regex": "(?i)\\b(MD5|SHA-1|SHA1)\\b",
+              "language": "Java",
+              "severity": "High",
+              "recommendation": "Use BCrypt, PBKDF2, or Argon2 for password hashing."
+            }
+          },
+          {
+            "id": "AUTH-002",
+            "description": "Implement secure session management (e.g., secure cookies, session timeouts).",
+            "pattern": {
+              "regex": "(?i)HttpSession\\s+[^;]+setAttribute\\s*\\([^;]+\\);[^;]+(?!setSecure\\s*\\(true\\))",
+              "language": "Java",
+              "severity": "Medium",
+              "recommendation": "Set HttpSession cookies with Secure and HttpOnly flags. Implement session timeouts."
+            }
+          }
+        ]
+      },
+      {
+        "category": "Authorization",
+        "checks": [
+          {
+            "id": "AUTHZ-001",
+            "description": "Enforce proper access control checks for sensitive resources.",
+            "pattern": {
+              "regex": "(?i)@RequestMapping\\s*\\([^)]*\\)[^{]*\\b(?!@PreAuthorize|@Secured)\\b",
+              "language": "Java/Spring",
+              "severity": "High",
+              "recommendation": "Use Spring Security annotations (@PreAuthorize, @Secured) for role-based access control."
+            }
+          }
+        ]
+      },
+      {
+        "category": "Data Protection",
+        "checks": [
+          {
+            "id": "DATA-001",
+            "description": "Use HTTPS for all sensitive data transmission.",
+            "pattern": {
+              "regex": "(?i)http://[^\\s]+",
+              "language": "Java/JSP/HTML",
+              "severity": "High",
+              "recommendation": "Replace HTTP with HTTPS in all URLs and ensure server enforces TLS."
+            }
+          },
+          {
+            "id": "DATA-002",
+            "description": "Avoid hardcoding sensitive information (e.g., API keys, credentials).",
+            "pattern": {
+              "regex": "(?i)\\b(password|apiKey|secret|token)\\s*=\\s*['\"][^'\"]+['\"]",
+              "language": "Java",
+              "severity": "Critical",
+              "recommendation": "Store sensitive data in environment variables or a secure vault."
+            }
+          }
+        ]
+      },
+      {
+        "category": "Error Handling and Logging",
+        "checks": [
+          {
+            "id": "ERR-001",
+            "description": "Avoid exposing sensitive information in error messages.",
+            "pattern": {
+              "regex": "(?i)\\bprintStackTrace\\s*\\([^)]*\\)",
+              "language": "Java",
+              "severity": "Medium",
+              "recommendation": "Use a logging framework like SLF4J/Log4j and avoid exposing stack traces to users."
+            }
+          }
+        ]
+      },
+      {
+        "category": "Secure Dependencies",
+        "checks": [
+          {
+            "id": "DEP-001",
+            "description": "Check for outdated or vulnerable dependencies.",
+            "pattern": {
+              "file": "pom.xml",
+              "regex": "<dependency>[\\s\\S]*?(log4j|commons-collections|struts)[\\s\\S]*?</dependency>",
+              "language": "XML",
+              "severity": "High",
+              "recommendation": "Use dependency-check tools (e.g., OWASP Dependency-Check) to identify and update vulnerable libraries."
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "vulnerability_patterns": {
+    "title": "Common Vulnerability Patterns for Java and Web Technologies",
+    "description": "Patterns to detect common vulnerabilities in Java and web applications, aligned with OWASP Top 10.",
+    "patterns": [
+      {
+        "id": "VULN-001",
+        "name": "SQL Injection",
+        "owasp_category": "A03:2021 - Injection",
+        "pattern": {
+          "regex": "(?i)Statement\\s*\\.\\s*createStatement\\s*\\([^)]*\\)[^;]*;[^;]*execute\\s*\\([^)]*\\+[^)]*\\)",
+          "language": "Java",
+          "severity": "Critical",
+          "recommendation": "Use PreparedStatement with parameterized queries."
+        }
+      },
+      {
+        "id": "VULN-002",
+        "name": "Cross-Site Scripting (XSS)",
+        "owasp_category": "A07:2021 - Cross-Site Scripting (XSS)",
+        "pattern": {
+          "regex": "(?i)<script>[\\s\\S]*?</script>|javascript:[^\\s]+",
+          "language": "HTML/JSP",
+          "severity": "High",
+          "recommendation": "Escape user input using OWASP Java Encoder or a secure template engine."
+        }
+      },
+      {
+        "id": "VULN-003",
+        "name": "Insecure Deserialization",
+        "owasp_category": "A08:2021 - Software and Data Integrity Failures",
+        "pattern": {
+          "regex": "(?i)\\bObjectInputStream\\s*\\.\\s*readObject\\s*\\([^)]*\\)",
+          "language": "Java",
+          "severity": "Critical",
+          "recommendation": "Avoid deserialization of untrusted data or use a secure alternative like JSON parsing."
+        }
+      },
+      {
+        "id": "VULN-004",
+        "name": "Cross-Site Request Forgery (CSRF)",
+        "owasp_category": "A05:2021 - Security Misconfiguration",
+        "pattern": {
+          "regex": "(?i)(@PostMapping|@RequestMapping\\s*\\([^)]*method\\s*=\\s*RequestMethod\\.POST\\))[^}]*\\b(?!@CsrfToken)\\b",
+          "language": "Java/Spring",
+          "severity": "High",
+          "recommendation": "Enable CSRF protection in Spring Security and include CSRF tokens in forms."
+        }
+      },
+      {
+        "id": "VULN-005",
+        "name": "Insecure File Upload",
+        "owasp_category": "A03:2021 - Injection",
+        "pattern": {
+          "regex": "(?i)MultipartFile\\s*[^;]+transferTo\\s*\\([^)]*\\)",
+          "language": "Java/Spring",
+          "severity": "High",
+          "recommendation": "Validate file type, size, and content. Store files outside the web root."
+        }
+      }
+    ]
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "last_updated": "2025-10-24",
+    "applicable_technologies": ["Java", "Spring", "JSP", "HTML", "JavaScript"],
+    "intended_use": "Input file for code review analyzer agent to detect security issues and vulnerabilities."
+  }
+}
