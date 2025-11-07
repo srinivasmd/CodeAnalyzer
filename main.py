@@ -207,9 +207,26 @@ def run_sonarqube_analysis(file_path: str) -> Dict:
         return {}
 
 
-def run_static_analysis(file_paths: List[str]) -> Dict[str, Any]:
+def run_static_analysis(file_paths: List[str], repo_path: str = ".") -> Dict[str, Any]:
     """Run comprehensive static analysis using multiple tools with support for more languages and graceful fallbacks."""
     results = {}
+
+    # Load config to check enabled tools
+    try:
+        with open('config.json', 'r') as f:
+            config = json.load(f)
+        static_config = config.get('static_analysis', {})
+        sonar_enabled = static_config.get('sonarqube', {}).get('enabled', False)
+        pylint_enabled = static_config.get('pylint', {}).get('enabled', True)
+        bandit_enabled = static_config.get('bandit', {}).get('enabled', True)
+        eslint_enabled = static_config.get('eslint', {}).get('enabled', True)
+        pmd_enabled = static_config.get('pmd', {}).get('enabled', True)
+    except Exception:
+        # Default to enabled if config not found
+        sonar_enabled = False
+        pylint_enabled = True
+        bandit_enabled = True
+        eslint_enabled = True
 
     def _run_tool(command: List[str], tool_name: str) -> str:
         """Helper to run a tool with error handling."""
@@ -236,11 +253,20 @@ def run_static_analysis(file_paths: List[str]) -> Dict[str, Any]:
         return _run_tool(["bandit", "-f", "json", fp], "Bandit")
 
     def _run_eslint(fp: str) -> str:
-        return _run_tool(["eslint", fp, "--format=json"], "ESLint")
+        return _run_tool(["npx.cmd", "eslint", fp, "--format=json"], "ESLint")
 
     def _run_spotbugs(fp: str) -> str:
         # SpotBugs requires class files; assume source analysis or skip if not set up
         return _run_tool(["spotbugs", "-textui", "-effort:max", "-low", fp], "SpotBugs")
+
+    def _run_pmd(fp: str) -> str:
+        # PMD runs on source code
+        pmd_path = os.path.join("pmd", "pmd-bin-6.55.0", "bin", "pmd.bat")
+        fp_full = os.path.join(repo_path, fp)
+        out = _run_tool([pmd_path, "-d", fp_full, "-R", "rulesets/java/quickstart.xml", "-f", "json"], "PMD")
+        if out:
+            print(f"PMD output for {fp}: {out[:500]}...")  # Log first 500 chars
+        return out
 
     def _run_dotnet_analyzer(fp: str) -> str:
         return _run_tool(["dotnet", "build", fp, "/p:RunAnalyzers=true", "/p:RunAnalyzersDuringBuild=true"], "DotNet Analyzer")
@@ -250,67 +276,77 @@ def run_static_analysis(file_paths: List[str]) -> Dict[str, Any]:
         for file_path in file_paths:
             ext = file_path.split('.')[-1].lower() if '.' in file_path else ''
             if ext == "py":
-                pylint_future = executor.submit(_run_pylint, file_path)
-                bandit_future = executor.submit(_run_bandit, file_path)
-                sonar_future = executor.submit(run_sonarqube_analysis, file_path)
-                futures[file_path] = (pylint_future, bandit_future, sonar_future)
+                tool_futures = []
+                if pylint_enabled:
+                    tool_futures.append(executor.submit(_run_pylint, file_path))
+                if bandit_enabled:
+                    tool_futures.append(executor.submit(_run_bandit, file_path))
+                if sonar_enabled:
+                    tool_futures.append(executor.submit(run_sonarqube_analysis, file_path))
+                futures[file_path] = (tool_futures, ['pylint'] if pylint_enabled else [] + ['bandit'] if bandit_enabled else [] + ['sonarqube'] if sonar_enabled else [])
             elif ext == "js":
-                eslint_future = executor.submit(_run_eslint, file_path)
-                sonar_future = executor.submit(run_sonarqube_analysis, file_path)
-                futures[file_path] = (eslint_future, sonar_future)
+                tool_futures = []
+                if eslint_enabled:
+                    tool_futures.append(executor.submit(_run_eslint, file_path))
+                if sonar_enabled:
+                    tool_futures.append(executor.submit(run_sonarqube_analysis, file_path))
+                futures[file_path] = (tool_futures, ['eslint'] if eslint_enabled else [] + ['sonarqube'] if sonar_enabled else [])
             elif ext == "java":
-                spotbugs_future = executor.submit(_run_spotbugs, file_path)
-                sonar_future = executor.submit(run_sonarqube_analysis, file_path)
-                futures[file_path] = (spotbugs_future, sonar_future)
+                tool_futures = []
+                tool_futures.append(executor.submit(_run_spotbugs, file_path))
+                if pmd_enabled:
+                    tool_futures.append(executor.submit(_run_pmd, file_path))
+                if sonar_enabled:
+                    tool_futures.append(executor.submit(run_sonarqube_analysis, file_path))
+                futures[file_path] = (tool_futures, ['spotbugs'] + (['pmd'] if pmd_enabled else []) + (['sonarqube'] if sonar_enabled else []))
             elif ext == "cs":
-                dotnet_future = executor.submit(_run_dotnet_analyzer, file_path)
-                sonar_future = executor.submit(run_sonarqube_analysis, file_path)
-                futures[file_path] = (dotnet_future, sonar_future)
+                tool_futures = []
+                tool_futures.append(executor.submit(_run_dotnet_analyzer, file_path))
+                if sonar_enabled:
+                    tool_futures.append(executor.submit(run_sonarqube_analysis, file_path))
+                futures[file_path] = (tool_futures, ['dotnet_analyzer'] + ['sonarqube'] if sonar_enabled else [])
             else:
-                # For unsupported languages, still run SonarQube if available
-                sonar_future = executor.submit(run_sonarqube_analysis, file_path)
-                futures[file_path] = (sonar_future,)
+                # For unsupported languages, run SonarQube if enabled
+                if sonar_enabled:
+                    futures[file_path] = ([executor.submit(run_sonarqube_analysis, file_path)], ['sonarqube'])
+                else:
+                    futures[file_path] = ([], [])
 
         # collect results
-        for file_path, futs in futures.items():
+        for file_path, (futs, tool_names) in futures.items():
             ext = file_path.split('.')[-1].lower() if '.' in file_path else ''
-            try:
-                if ext == 'py':
-                    pylint_out = futs[0].result()
-                    bandit_out = futs[1].result()
-                    sonar_out = futs[2].result()
-                    results[file_path] = {
-                        'pylint': json.loads(pylint_out) if pylint_out else {},
-                        'bandit': json.loads(bandit_out) if bandit_out else {},
-                        'sonarqube': sonar_out
-                    }
-                elif ext == 'js':
-                    eslint_out = futs[0].result()
-                    sonar_out = futs[1].result()
-                    results[file_path] = {
-                        'eslint': json.loads(eslint_out) if eslint_out else {},
-                        'sonarqube': sonar_out
-                    }
-                elif ext == 'java':
-                    spotbugs_out = futs[0].result()
-                    sonar_out = futs[1].result()
-                    results[file_path] = {
-                        'spotbugs': spotbugs_out,
-                        'sonarqube': sonar_out
-                    }
-                elif ext == 'cs':
-                    dotnet_out = futs[0].result()
-                    sonar_out = futs[1].result()
-                    results[file_path] = {
-                        'dotnet_analyzer': dotnet_out,
-                        'sonarqube': sonar_out
-                    }
-                else:
-                    sonar_out = futs[0].result()
-                    results[file_path] = {'sonarqube': sonar_out}
-            except Exception:
-                # Non-fatal: include whatever we managed
-                results.setdefault(file_path, {})
+            results[file_path] = {}
+            idx = 0
+            for tool_name in tool_names:
+                if idx < len(futs):
+                    out = futs[idx].result()
+                    idx += 1
+                    if tool_name == 'pylint':
+                        try:
+                            results[file_path]['pylint'] = json.loads(out) if out else {}
+                        except json.JSONDecodeError:
+                            results[file_path]['pylint'] = {'error': 'Failed to parse JSON output', 'raw': out[:1000]}
+                    elif tool_name == 'bandit':
+                        try:
+                            results[file_path]['bandit'] = json.loads(out) if out else {}
+                        except json.JSONDecodeError:
+                            results[file_path]['bandit'] = {'error': 'Failed to parse JSON output', 'raw': out[:1000]}
+                    elif tool_name == 'eslint':
+                        try:
+                            results[file_path]['eslint'] = json.loads(out) if out else {}
+                        except json.JSONDecodeError:
+                            results[file_path]['eslint'] = {'error': 'Failed to parse JSON output', 'raw': out[:1000]}
+                    elif tool_name == 'sonarqube':
+                        results[file_path]['sonarqube'] = out
+                    elif tool_name == 'spotbugs':
+                        results[file_path]['spotbugs'] = out
+                    elif tool_name == 'pmd':
+                        try:
+                            results[file_path]['pmd'] = json.loads(out) if out else {}
+                        except json.JSONDecodeError:
+                            results[file_path]['pmd'] = {'error': 'Failed to parse JSON output', 'raw': out[:1000]}
+                    elif tool_name == 'dotnet_analyzer':
+                        results[file_path]['dotnet_analyzer'] = out
 
     return results
 
@@ -612,19 +648,45 @@ def main(repo_path: str):
             historical_patterns
         )
 
-        # Generate detailed report
-        report = {
-            "summary": analysis["summary"],
-            "risk_assessment": analysis["risk_assessment"],
-            "security_findings": analysis["security_findings"],
-            "review_focus": {
-                **analysis["review_focus"],
+        # Handle review_focus if it's a list, dict, or string (fallback from LLM)
+        review_focus_base = analysis.get("review_focus", {})
+        if isinstance(review_focus_base, list):
+            review_focus = {
+                "priority_files": review_focus_base,
+                "deep_dive_links": [
+                    f"vscode://file/{repo_path}/{file}#L{change.start_line}-L{change.end_line}"
+                    for file, change in zip(file_paths, changes)
+                    if not change.is_cosmetic
+                ],
+                "suggested_reviewers": []
+            }
+        elif isinstance(review_focus_base, dict):
+            review_focus = {
+                **review_focus_base,
                 "deep_dive_links": [
                     f"vscode://file/{repo_path}/{file}#L{change.start_line}-L{change.end_line}"
                     for file, change in zip(file_paths, changes)
                     if not change.is_cosmetic
                 ]
-            },
+            }
+        else:
+            # If it's a string or other type, treat as priority_files
+            review_focus = {
+                "priority_files": [str(review_focus_base)] if review_focus_base else [],
+                "deep_dive_links": [
+                    f"vscode://file/{repo_path}/{file}#L{change.start_line}-L{change.end_line}"
+                    for file, change in zip(file_paths, changes)
+                    if not change.is_cosmetic
+                ],
+                "suggested_reviewers": []
+            }
+
+        # Generate detailed report
+        report = {
+            "summary": analysis["summary"],
+            "risk_assessment": analysis["risk_assessment"],
+            "security_findings": analysis["security_findings"],
+            "review_focus": review_focus,
             "compliance_check": analysis["compliance_check"],
             "statistics": {
                 "total_files": len(file_paths),

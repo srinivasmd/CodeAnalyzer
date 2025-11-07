@@ -1,0 +1,109 @@
+[bandit]
+exclude_dirs = .git, .svn, .hg, .bzr, .tox, .eggs, *.egg, .git, __pycache__, .cache, .pytest_cache, .mypy_cache, .venv, venv, env, .env
+skips = B101,B601
+
+[tool:bandit]
+# (optional) list of file extensions to check (comma separated)
+# valid values: 'py', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm'
+# defaults to 'py' if not specified
+# NOTE: Does not apply to folders specified in 'targets'
+# extensions = py
+
+# (optional) baseline report to compare against
+# baseline = baseline.json
+
+# (optional) list of test IDs to skip
+skips = B101,B601,B110
+
+# (optional) list of test IDs that should be run
+# tests =
+
+# (optional) file type to exclude from scan
+# exclude_file_types = html,htm
+
+# (optional) file names to exclude from scan
+exclude_files = test_*.py, *_test.py, tests.py
+
+# (optional) file paths to exclude from scan
+exclude_dirs = .git, .svn, .hg, .bzr, .tox, .eggs, *.egg, .git, __pycache__, .cache, .pytest_cache, .mypy_cache, .venv, venv, env, .env
+
+# (optional) path to a .bandit file that supplies command line arguments
+# ini_path = .bandit
+
+# (optional) logger name
+# logger =
+
+# (optional) log format string
+# log_format = "[%(module)s]\t%(levelname)s\t%(message)s"
+
+# (optional) log level
+# log_level = INFO
+
+# (optional) number of processes to use for multiprocessing
+# number_of_processes = 4
+
+# (optional) recursive search when scanning directories
+# recursive = True
+
+# (optional) file containing lines to ignore when aggregating
+# aggregate = True
+
+# (optional) output format for results
+# output_format = json
+
+# (optional) path to output file for results
+# output_file = bandit.json
+
+# (optional) severity levels to report
+# severity = all
+
+# (optional) confidence levels to report
+# confidence = all
+
+# (optional) minimum confidence level to report
+# min_confidence = MEDIUM
+
+# (optional) minimum severity level to report
+# min_severity = MEDIUM
+
+# (optional) show only issues with severity of LOW or higher
+# only_show_issues = False
+
+# (optional) show lines of code with issues
+# show_source = False
+
+# (optional) show tool version number and exit
+# version = False
+
+# (optional) show help message and exit
+# help = False
+
+# (optional) comma separated list of targets to scan
+# targets =
+
+# (optional) verbose output
+# verbose = False
+
+# (optional) quiet output
+# quiet = False
+
+# (optional) debug output
+# debug = False
+
+# (optional) show timing information
+# profile = False
+
+# (optional) use ini configuration file
+# ini = True
+
+# (optional) exit code when issues are found
+# exit_zero = False
+
+# (optional) hard fail on missing files
+# hard_fail_on_missing_files = False
+
+# (optional) comma separated list of test IDs to include
+# include_tests =
+
+# (optional) comma separated list of test IDs to exclude
+# exclude_tests = B101,B601,B110

@@ -21,9 +21,9 @@ def test_run_static_analysis_monkeypatched(monkeypatch, tmp_path):
     file_path = str(p)
 
     # monkeypatch subprocess.run to return predictable JSON outputs for pylint and bandit
-    def fake_run(cmd, capture_output=True, text=True, cwd=None):
+    def fake_run(cmd, capture_output=True, text=True, cwd=None, timeout=None):
         # return empty list JSON for diagnostics
-        return SimpleNamespace(stdout='[]')
+        return SimpleNamespace(stdout='[]', returncode=0)
 
     monkeypatch.setattr('subprocess.run', fake_run)
 

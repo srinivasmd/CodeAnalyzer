@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import os
 import re
+import logging
+import sqlite3
 from urllib.parse import urlparse
 
 # Reuse helper functions from main.py
@@ -15,13 +17,125 @@ from main import get_pr_diff, run_static_analysis, get_historical_patterns
 from main import NVIDIA_API_ENDPOINT, NVIDIA_API_KEY, NVIDIA_API_MODEL
 from metrics import metrics_tracker
 
+CHAT_HISTORY_DB = 'chat_history.db'
+
+def get_db_connection():
+    """Get a connection to the SQLite database."""
+    conn = sqlite3.connect(CHAT_HISTORY_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Initialize the database table if it doesn't exist."""
+    conn = get_db_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def migrate_json_to_db():
+    """Migrate existing chat history from JSON file to SQLite database."""
+    json_file = 'chat_history.json'
+    if os.path.exists(json_file):
+        try:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                messages = json.load(f)
+            if messages:
+                init_db()
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                # Check if database is empty
+                cursor.execute('SELECT COUNT(*) FROM messages')
+                count = cursor.fetchone()[0]
+                if count == 0:
+                    # Migrate messages
+                    for msg in messages:
+                        cursor.execute('INSERT INTO messages (role, content) VALUES (?, ?)', (msg['role'], msg['content']))
+                    conn.commit()
+                    if logger:
+                        logger.info(f"Migrated {len(messages)} messages from JSON to database")
+                conn.close()
+        except Exception as e:
+            if logger:
+                logger.warning(f"Failed to migrate JSON data: {e}")
+
+def load_chat_history():
+    """Load chat history from SQLite database."""
+    try:
+        init_db()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT role, content FROM messages ORDER BY id')
+        rows = cursor.fetchall()
+        messages = [{'role': row['role'], 'content': row['content']} for row in rows]
+        conn.close()
+        return messages
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to load chat history: {e}")
+        return []
+
+def save_chat_history(messages):
+    """Save chat history to SQLite database."""
+    try:
+        init_db()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Clear existing messages
+        cursor.execute('DELETE FROM messages')
+        # Insert new messages
+        for msg in messages:
+            cursor.execute('INSERT INTO messages (role, content) VALUES (?, ?)', (msg['role'], msg['content']))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to save chat history: {e}")
+
+# Load configuration for logging
+try:
+    base_dir = os.path.dirname(__file__) or os.getcwd()
+    config_path = os.path.join(base_dir, 'config.json')
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    logging_config = config.get('logging', {})
+    logging_enabled = logging_config.get('enabled', True)
+    logging_level = logging_config.get('level', 'INFO')
+except Exception as e:
+    logging_enabled = True
+    logging_level = 'INFO'
+    print(f"Warning: Could not load logging config: {e}")
+
+# Set up logging
+if logging_enabled:
+    logging.basicConfig(
+        level=getattr(logging, logging_level.upper(), logging.INFO),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+    logger = logging.getLogger('streamlit_app')
+    logger.info("Streamlit app logging initialized")
+else:
+    logger = None
+
 st.set_page_config(page_title="Code Review Summarizer Chat", layout="wide")
 
 st.title("Code Review Summarizer — Chat Interface")
 st.write("Enter a repository path (absolute) or a Git/PR URL and I'll analyze the latest commit(s) and stream a review from the LLM.")
 
 if 'messages' not in st.session_state:
-    st.session_state['messages'] = []  # list of dicts: {role: 'user'|'assistant', 'content': text}
+    migrate_json_to_db()  # Migrate any existing JSON data to DB
+    st.session_state['messages'] = load_chat_history()  # Load from database on startup
+    if logger:
+        logger.info(f"Loaded {len(st.session_state['messages'])} messages from history")
 
 # On startup, detect whether guideline/checklist files exist so sidebar can show status immediately
 try:
@@ -31,7 +145,11 @@ try:
     st.session_state.setdefault('guidelines_found', os.path.exists(_guidelines_path))
     st.session_state.setdefault('checklist_found', os.path.exists(_checklist_path))
     st.session_state.setdefault('guidelines_load_error', None)
-except Exception:
+    if logger:
+        logger.info(f"Guidelines found: {os.path.exists(_guidelines_path)}, Checklist found: {os.path.exists(_checklist_path)}")
+except Exception as e:
+    if logger:
+        logger.warning(f"Error detecting guideline/checklist files: {e}")
     # If session state isn't available or os errors occur, ignore; sidebar will show 'not checked yet'
     pass
 
@@ -42,6 +160,8 @@ def stream_nvidia_chat(messages: list) -> Generator[str, None, None]:
     Best-effort: tries to stream lines from the HTTP response. If streaming isn't supported,
     will yield the full response as one chunk.
     """
+    if logger:
+        logger.info(f"Calling NVIDIA API with {len(messages)} messages")
     base_endpoint = (NVIDIA_API_ENDPOINT or "https://integrate.api.nvidia.com/v1").rstrip('/')
     invoke_url = f"{base_endpoint}/chat/completions"
 
@@ -62,10 +182,14 @@ def stream_nvidia_chat(messages: list) -> Generator[str, None, None]:
     }
 
     try:
+        if logger:
+            logger.info(f"Sending request to {invoke_url}")
         with requests.post(invoke_url, headers=headers, json=payload, stream=True, timeout=120) as resp:
             # If the server sends chunked lines (SSE-like or JSON-lines), iterate them
             if resp.status_code != 200:
                 # Not successful — raise to be handled by caller
+                if logger:
+                    logger.error(f"API request failed with status {resp.status_code}: {resp.text}")
                 resp.raise_for_status()
 
             # Try streaming by lines
@@ -115,10 +239,16 @@ def stream_nvidia_chat(messages: list) -> Generator[str, None, None]:
                     # Not JSON: yield raw line
                     yield line
             # End of streaming — done
+            if logger:
+                logger.info("Streaming response completed successfully")
     except Exception as e:
+        if logger:
+            logger.error(f"Streaming failed: {e}")
         # If streaming fails for any reason, try a single non-streaming call as fallback
         try:
             payload.pop('stream', None)
+            if logger:
+                logger.info("Attempting fallback non-streaming request")
             r2 = requests.post(invoke_url, headers=headers, json=payload, timeout=120)
             r2.raise_for_status()
             res = r2.json()
@@ -136,6 +266,8 @@ def stream_nvidia_chat(messages: list) -> Generator[str, None, None]:
             # If not found, yield the raw JSON
             yield json.dumps(res)
         except Exception as e2:
+            if logger:
+                logger.error(f"Fallback request also failed: {e2}")
             yield f"Error calling NVIDIA API: {e} / {e2}"
 
 
@@ -254,6 +386,28 @@ def handle_repo_input(repo_path: str):
         static_results = run_static_analysis(file_paths)
         historical = get_historical_patterns(repo_dir)
 
+        # Yield static analysis results for UI display
+        # Load config to get enabled tools for title
+        enabled_tools = []
+        try:
+            base_dir = os.path.dirname(__file__) or os.getcwd()
+            config_path = os.path.join(base_dir, 'config.json')
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            static_config = config.get('static_analysis', {})
+            if static_config.get('pylint', {}).get('enabled', True):
+                enabled_tools.append('pylint')
+            if static_config.get('bandit', {}).get('enabled', True):
+                enabled_tools.append('bandit')
+            if static_config.get('eslint', {}).get('enabled', True):
+                enabled_tools.append('eslint')
+            if static_config.get('sonarqube', {}).get('enabled', False):
+                enabled_tools.append('sonarqube')
+        except Exception:
+            enabled_tools = ['pylint', 'bandit', 'eslint']  # defaults
+
+        yield json.dumps({"static_analysis": static_results, "enabled_tools": enabled_tools})
+
         # Load optional guideline and security checklist JSON files from the project root
         guidelines = {}
         checklist = {}
@@ -287,11 +441,12 @@ def handle_repo_input(repo_path: str):
             'content': (
                 "You are a senior developer reviewing a pull request. Use the provided PR review guidelines and the security checklist to evaluate changes. "
                 "Specifically, for each finding reference which guideline or checklist item was applied (include its id/key if available). "
+                "For the compliance_check, evaluate each item in the security checklist against the provided changes: set 'pass' if the code complies with the check, 'fail' if it violates the check, 'manual-check' if it requires human review or more context. Use the exact ids from the checklist as keys.\n"
                 "Produce the following JSON object only with these keys:\n"
                 "- summary: a short human-readable summary of the change and overall recommendation.\n"
                 "- risk_assessment: map of issue -> {score: number 0-10, confidence: number 0.0-1.0, rationale: string, applied_rules: [list of guideline/checklist ids]}\n"
                 "- security_findings: list of {title, description, file, line, severity (low|medium|high|critical), checklist_items_applied}\n"
-                "- review_focus: list of files/areas requiring manual review with reasons\n"
+                "- review_focus: map of {priority_files: list, deep_dive_links: list, suggested_reviewers: list}\n"
                 "- compliance_check: map of checklist item id -> {status: pass|fail|manual-check, notes}\n"
                 "Risk scoring rules: use 0 (no risk) to 10 (critical). Provide a confidence score between 0.0 and 1.0 for each assessment. Always cite which guideline/checklist entries influenced the score."
             )
@@ -331,6 +486,8 @@ def handle_repo_input(repo_path: str):
         for chunk in stream_nvidia_chat(messages):
             assistant_text += chunk
             yield chunk
+        if logger:
+            logger.info(f"LLM response accumulated: {len(assistant_text)} characters")
 
     except Exception as e:
         yield f"Error preparing repo analysis: {e}"
@@ -426,59 +583,57 @@ with st.expander("📊 Metrics Reports (click to expand)"):
 st.write("---")
 
 # Render chat messages
-for msg in st.session_state['messages']:
+for i, msg in enumerate(st.session_state['messages']):
     if msg['role'] == 'user':
         st.chat_message('user').write(msg['content'])
     else:
         # For assistant messages, try to parse as JSON and display structured
         assistant_msg = st.chat_message('assistant')
         msg_area = assistant_msg.container()
+        analysis = None
+        content = msg['content'].strip()
         try:
-            analysis = json.loads(msg['content'])
-            if isinstance(analysis, dict):
-                # Raw JSON in a collapsible expander
-                with msg_area.expander("🔍 Raw JSON (click to expand)"):
-                    st.json(analysis)
+            analysis = json.loads(content)
+        except json.JSONDecodeError:
+            # Try to extract JSON from the content
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            if start != -1 and end > start:
+                try:
+                    analysis = json.loads(content[start:end])
+                except json.JSONDecodeError:
+                    analysis = None
 
-                # Human-readable Summary
-                if 'summary' in analysis:
-                    col1, col2, col3 = msg_area.columns([8, 1, 1])
-                    with col1:
-                        msg_area.markdown("## Summary")
-                    with col2:
-                        if msg_area.button("👍", key=f"summary_up_{msg['content'][:10]}", help="Positive feedback"):
-                            msg_area.success("Thanks for the positive feedback!")
-                    with col3:
-                        if msg_area.button("👎", key=f"summary_down_{msg['content'][:10]}", help="Negative feedback"):
-                            msg_area.warning("Thanks for the feedback!")
+        if analysis is not None and isinstance(analysis, dict):
+            # Raw JSON in a collapsible expander
+            with msg_area.expander("🔍 Raw JSON (click to expand)"):
+                st.json(analysis)
+
+            # Human-readable Summary
+            if 'summary' in analysis:
+                with msg_area.container():
+                    st.markdown("### 📋 Summary")
                     # If summary is dict or string, render accordingly
                     if isinstance(analysis['summary'], dict):
                         for k, v in analysis['summary'].items():
-                            msg_area.markdown(f"**{k}**: {v}")
+                            st.markdown(f"**{k}**: {v}")
                     else:
-                        msg_area.write(analysis['summary'])
+                        st.write(analysis['summary'])
 
-                # Risk Assessment
-                if 'risk_assessment' in analysis:
-                    col1, col2, col3 = msg_area.columns([8, 1, 1])
-                    with col1:
-                        msg_area.markdown("## Risk Assessment")
-                    with col2:
-                        if msg_area.button("👍", key=f"risk_up_{msg['content'][:10]}", help="Positive feedback"):
-                            msg_area.success("Thanks for the positive feedback!")
-                    with col3:
-                        if msg_area.button("👎", key=f"risk_down_{msg['content'][:10]}", help="Negative feedback"):
-                            msg_area.warning("Thanks for the feedback!")
+            # Risk Assessment
+            if 'risk_assessment' in analysis:
+                with msg_area.container():
+                    st.markdown("### ⚠️ Risk Assessment")
                     ra = analysis['risk_assessment']
                     if isinstance(ra, dict):
                         for issue, data in ra.items():
-                            with msg_area.expander(f"{issue} (click to expand)"):
+                            with st.expander(f"🔍 {issue}"):
                                 if isinstance(data, dict):
                                     score = data.get('score')
                                     conf = data.get('confidence')
                                     rationale = data.get('rationale')
                                     applied = data.get('applied_rules')
-                                    st.write(f"Score: {score} — Confidence: {conf}")
+                                    st.metric("Risk Score", score, help=f"Confidence: {conf}")
                                     if rationale:
                                         st.markdown("**Rationale**")
                                         st.write(rationale)
@@ -488,56 +643,37 @@ for msg in st.session_state['messages']:
                                 else:
                                     st.write(data)
 
-                # Security Findings
-                if 'security_findings' in analysis:
-                    col1, col2, col3 = msg_area.columns([8, 1, 1])
-                    with col1:
-                        msg_area.markdown("## Security Findings")
-                    with col2:
-                        if msg_area.button("👍", key=f"findings_up_{msg['content'][:10]}", help="Positive feedback"):
-                            msg_area.success("Thanks for the positive feedback!")
-                    with col3:
-                        if msg_area.button("👎", key=f"findings_down_{msg['content'][:10]}", help="Negative feedback"):
-                            msg_area.warning("Thanks for the feedback!")
+            # Security Findings
+            if 'security_findings' in analysis:
+                with msg_area.container():
+                    st.markdown("### 🔒 Security Findings")
                     sf = analysis['security_findings']
                     if isinstance(sf, list):
                         for idx, finding in enumerate(sf, start=1):
                             title = finding.get('title') if isinstance(finding, dict) else f"Finding {idx}"
-                            with msg_area.expander(f"{title}"):
+                            severity = finding.get('severity', 'unknown') if isinstance(finding, dict) else 'unknown'
+                            severity_color = {'low': '🟢', 'medium': '🟡', 'high': '🟠', 'critical': '🔴'}.get(severity.lower(), '⚪')
+                            with st.expander(f"{severity_color} {title}"):
                                 st.json(finding)
                     else:
-                        msg_area.write(sf)
+                        st.write(sf)
 
-                # Review Focus
-                if 'review_focus' in analysis:
-                    col1, col2, col3 = msg_area.columns([8, 1, 1])
-                    with col1:
-                        msg_area.markdown("## Review Focus")
-                    with col2:
-                        if msg_area.button("👍", key=f"focus_up_{msg['content'][:10]}", help="Positive feedback"):
-                            msg_area.success("Thanks for the positive feedback!")
-                    with col3:
-                        if msg_area.button("👎", key=f"focus_down_{msg['content'][:10]}", help="Negative feedback"):
-                            msg_area.warning("Thanks for the feedback!")
+            # Review Focus
+            if 'review_focus' in analysis:
+                with msg_area.container():
+                    st.markdown("### 🎯 Review Focus")
                     rf = analysis['review_focus']
                     if isinstance(rf, dict):
                         for k, v in rf.items():
-                            msg_area.markdown(f"**{k}**")
-                            msg_area.write(v)
+                            st.markdown(f"**{k}**")
+                            st.write(v)
                     else:
-                        msg_area.write(rf)
+                        st.write(rf)
 
-                # Compliance Check
-                if 'compliance_check' in analysis:
-                    col1, col2, col3 = msg_area.columns([8, 1, 1])
-                    with col1:
-                        msg_area.markdown("## Compliance Check")
-                    with col2:
-                        if msg_area.button("👍", key=f"compliance_up_{msg['content'][:10]}", help="Positive feedback"):
-                            msg_area.success("Thanks for the positive feedback!")
-                    with col3:
-                        if msg_area.button("👎", key=f"compliance_down_{msg['content'][:10]}", help="Negative feedback"):
-                            msg_area.warning("Thanks for the feedback!")
+            # Compliance Check
+            if 'compliance_check' in analysis:
+                with msg_area.container():
+                    st.markdown("### ✅ Compliance Check")
                     cc = analysis['compliance_check']
                     if isinstance(cc, dict):
                         try:
@@ -546,16 +682,14 @@ for msg in st.session_state['messages']:
                             for cid, info in cc.items():
                                 status = info.get('status') if isinstance(info, dict) else info
                                 notes = info.get('notes') if isinstance(info, dict) else ''
-                                rows.append({'check': cid, 'status': status, 'notes': notes})
-                            msg_area.table(rows)
+                                status_icon = {'pass': '✅', 'fail': '❌', 'manual-check': '🔍'}.get(status.lower(), '❓')
+                                rows.append({'Check ID': cid, 'Status': f"{status_icon} {status}", 'Notes': notes})
+                            st.table(rows)
                         except Exception:
-                            msg_area.write(cc)
+                            st.write(cc)
                     else:
-                        msg_area.write(cc)
-            else:
-                # If not a dict but valid JSON, show as string
-                msg_area.write(str(analysis))
-        except json.JSONDecodeError:
+                        st.write(cc)
+        else:
             # If not JSON, just write as text
             msg_area.write(msg['content'])
 
@@ -565,6 +699,7 @@ user_input = st.chat_input("Enter repo path (absolute) and press Enter")
 if user_input:
     # append user message
     st.session_state['messages'].append({'role': 'user', 'content': user_input})
+    save_chat_history(st.session_state['messages'])  # Save after adding user message
     # show user message immediately
     st.chat_message('user').write(user_input)
 
@@ -575,6 +710,7 @@ if user_input:
 
     # Stream response
     accumulated = ''
+    static_analysis_displayed = False
     with st.spinner('Analyzing repository and streaming response...'):
         for chunk in handle_repo_input(user_input):
             # update UI progressively
@@ -585,82 +721,112 @@ if user_input:
                 # If successful, clear any previous streaming text and display structured format
                 text_block.markdown("")  # Clear streaming text
                 if isinstance(analysis, dict):
+                    if 'static_analysis' in analysis and not static_analysis_displayed:
+                        # Display static analysis results
+                        enabled_tools = analysis.get('enabled_tools', ['pylint', 'bandit', 'eslint'])
+                        expander_title = f"🔧 Static Analysis Results ({', '.join(enabled_tools)})"
+                        with message_area.expander(expander_title):
+                            static_results = analysis['static_analysis']
+                            for file_path, tools in static_results.items():
+                                st.markdown(f"**{file_path}**")
+                                if isinstance(tools, dict):
+                                    for tool, result in tools.items():
+                                        if tool in enabled_tools:
+                                            st.markdown(f"- **{tool.upper()}**:")
+                                            if isinstance(result, dict):
+                                                st.json(result)
+                                            else:
+                                                st.write(str(result))
+                                else:
+                                    st.write(str(tools))
+                        static_analysis_displayed = True
+                        accumulated = ''  # Reset for LLM response
+                        continue
+
                     # Raw JSON in a collapsible expander
                     with message_area.expander("🔍 Raw JSON (click to expand)"):
                         st.json(analysis)
 
                     # Human-readable Summary
                     if 'summary' in analysis:
-                        message_area.markdown("## Summary")
-                        # If summary is dict or string, render accordingly
-                        if isinstance(analysis['summary'], dict):
-                            for k, v in analysis['summary'].items():
-                                message_area.markdown(f"**{k}**: {v}")
-                        else:
-                            message_area.write(analysis['summary'])
+                        with message_area.container():
+                            st.markdown("### 📋 Summary")
+                            # If summary is dict or string, render accordingly
+                            if isinstance(analysis['summary'], dict):
+                                for k, v in analysis['summary'].items():
+                                    st.markdown(f"**{k}**: {v}")
+                            else:
+                                st.write(analysis['summary'])
 
                     # Risk Assessment
                     if 'risk_assessment' in analysis:
-                        message_area.markdown("## Risk Assessment")
-                        ra = analysis['risk_assessment']
-                        if isinstance(ra, dict):
-                            for issue, data in ra.items():
-                                with message_area.expander(f"{issue} (click to expand)"):
-                                    if isinstance(data, dict):
-                                        score = data.get('score')
-                                        conf = data.get('confidence')
-                                        rationale = data.get('rationale')
-                                        applied = data.get('applied_rules')
-                                        st.write(f"Score: {score} — Confidence: {conf}")
-                                        if rationale:
-                                            st.markdown("**Rationale**")
-                                            st.write(rationale)
-                                        if applied:
-                                            st.markdown("**Applied Rules**")
-                                            st.write(applied)
-                                    else:
-                                        st.write(data)
+                        with message_area.container():
+                            st.markdown("### ⚠️ Risk Assessment")
+                            ra = analysis['risk_assessment']
+                            if isinstance(ra, dict):
+                                for issue, data in ra.items():
+                                    with st.expander(f"🔍 {issue}"):
+                                        if isinstance(data, dict):
+                                            score = data.get('score')
+                                            conf = data.get('confidence')
+                                            rationale = data.get('rationale')
+                                            applied = data.get('applied_rules')
+                                            st.metric("Risk Score", score, help=f"Confidence: {conf}")
+                                            if rationale:
+                                                st.markdown("**Rationale**")
+                                                st.write(rationale)
+                                            if applied:
+                                                st.markdown("**Applied Rules**")
+                                                st.write(applied)
+                                        else:
+                                            st.write(data)
 
                     # Security Findings
                     if 'security_findings' in analysis:
-                        message_area.markdown("## Security Findings")
-                        sf = analysis['security_findings']
-                        if isinstance(sf, list):
-                            for idx, finding in enumerate(sf, start=1):
-                                title = finding.get('title') if isinstance(finding, dict) else f"Finding {idx}"
-                                with message_area.expander(f"{title}"):
-                                    st.json(finding)
-                        else:
-                            message_area.write(sf)
+                        with message_area.container():
+                            st.markdown("### 🔒 Security Findings")
+                            sf = analysis['security_findings']
+                            if isinstance(sf, list):
+                                for idx, finding in enumerate(sf, start=1):
+                                    title = finding.get('title') if isinstance(finding, dict) else f"Finding {idx}"
+                                    severity = finding.get('severity', 'unknown') if isinstance(finding, dict) else 'unknown'
+                                    severity_color = {'low': '🟢', 'medium': '🟡', 'high': '🟠', 'critical': '🔴'}.get(severity.lower(), '⚪')
+                                    with st.expander(f"{severity_color} {title}"):
+                                        st.json(finding)
+                            else:
+                                st.write(sf)
 
                     # Review Focus
                     if 'review_focus' in analysis:
-                        message_area.markdown("## Review Focus")
-                        rf = analysis['review_focus']
-                        if isinstance(rf, dict):
-                            for k, v in rf.items():
-                                message_area.markdown(f"**{k}**")
-                                message_area.write(v)
-                        else:
-                            message_area.write(rf)
+                        with message_area.container():
+                            st.markdown("### 🎯 Review Focus")
+                            rf = analysis['review_focus']
+                            if isinstance(rf, dict):
+                                for k, v in rf.items():
+                                    st.markdown(f"**{k}**")
+                                    st.write(v)
+                            else:
+                                st.write(rf)
 
                     # Compliance Check
                     if 'compliance_check' in analysis:
-                        message_area.markdown("## Compliance Check")
-                        cc = analysis['compliance_check']
-                        if isinstance(cc, dict):
-                            try:
-                                # Render as table if mapping to statuses
-                                rows = []
-                                for cid, info in cc.items():
-                                    status = info.get('status') if isinstance(info, dict) else info
-                                    notes = info.get('notes') if isinstance(info, dict) else ''
-                                    rows.append({'check': cid, 'status': status, 'notes': notes})
-                                message_area.table(rows)
-                            except Exception:
-                                message_area.write(cc)
-                        else:
-                            message_area.write(cc)
+                        with message_area.container():
+                            st.markdown("### ✅ Compliance Check")
+                            cc = analysis['compliance_check']
+                            if isinstance(cc, dict):
+                                try:
+                                    # Render as table if mapping to statuses
+                                    rows = []
+                                    for cid, info in cc.items():
+                                        status = info.get('status') if isinstance(info, dict) else info
+                                        notes = info.get('notes') if isinstance(info, dict) else ''
+                                        status_icon = {'pass': '✅', 'fail': '❌', 'manual-check': '🔍'}.get(status.lower(), '❓')
+                                        rows.append({'Check ID': cid, 'Status': f"{status_icon} {status}", 'Notes': notes})
+                                    st.table(rows)
+                                except Exception:
+                                    st.write(cc)
+                            else:
+                                st.write(cc)
                 else:
                     # If not a dict but valid JSON, show as string
                     message_area.write(str(analysis))
@@ -672,3 +838,4 @@ if user_input:
 
     # append assistant final message to session
     st.session_state['messages'].append({'role': 'assistant', 'content': accumulated})
+    save_chat_history(st.session_state['messages'])  # Save after adding assistant message

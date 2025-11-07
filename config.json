@@ -40,6 +40,11 @@
         "bandit": {
             "enabled": true,
             "severity_threshold": "medium"
+        },
+        "pmd": {
+            "enabled": true,
+            "rulesets": "rulesets/java/quickstart.xml",
+            "format": "json"
         }
     },
     "review": {
@@ -53,5 +58,9 @@
         "include_stats": true,
         "include_links": true,
         "max_summary_length": 500
+    },
+    "logging": {
+        "enabled": true,
+        "level": "INFO"
     }
 }
